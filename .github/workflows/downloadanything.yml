@@ -1,0 +1,109 @@
+name: download anything
+
+on:
+  workflow_dispatch:
+    inputs:
+      del:
+        description: '是否删除历史编译的流程记录'
+        required: true
+        default: false
+        type: boolean
+      url:
+        description: '指定下载的 URL'
+        required: true
+        default: ''
+        type: string
+      filename:
+        description: '指定保存的文件名（留空则自动从 URL 提取）'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  download:
+    name: Download and upload artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: 校验 URL
+        run: |
+          if [ -z "$URL" ]; then
+            echo "::error::未提供下载 URL，请在 workflow_dispatch 的 url 输入中填写"
+            exit 1
+          fi
+          echo "待下载: $URL"
+        env:
+          URL: ${{ github.event.inputs.url }}
+
+      - name: 创建下载目录
+        run: mkdir -p download
+
+      - name: 安装 aria2 多线程下载工具
+        run: |
+          if ! command -v aria2c >/dev/null 2>&1; then
+            echo "aria2 未预装，正在安装..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq aria2
+          fi
+          aria2c --version | head -n1
+
+      - name: 多线程下载文件
+        id: download
+        run: |
+          URL="${{ github.event.inputs.url }}"
+          # 优先使用手动指定的文件名，否则从 URL 提取（去掉查询串/锚点）
+          NAME="${{ github.event.inputs.filename }}"
+          if [ -z "$NAME" ]; then
+            NAME=$(basename "$URL" | sed 's/[?#].*//')
+          fi
+          if [ -z "$NAME" ]; then
+            NAME="downloaded-file"
+          fi
+          echo "保存文件名: $NAME"
+
+          # aria2c 多线程分段下载：
+          #   -x 16 / -s 16  单服务器最多 16 连接、分成 16 段并行
+          #   -k 1M          最小分片 1M，小文件也能分段
+          #   -m 3           失败最多重试 3 次（配合 --retry-wait=3 秒退避）
+          #   --file-allocation=trunc  快速预分配，避免 prealloc 拖慢起速
+          aria2c \
+            -x 16 -s 16 -k 1M \
+            -m 3 --retry-wait=3 \
+            --timeout=60 --connect-timeout=15 \
+            --file-allocation=trunc \
+            --allow-overwrite=true --auto-file-renaming=false \
+            --human-readable=true --console-log-level=warn --summary-interval=5 \
+            -d download -o "$NAME" "$URL"
+
+          echo "filename=$NAME" >> $GITHUB_OUTPUT
+          echo "size=$(stat -c%s "download/$NAME")" >> $GITHUB_OUTPUT
+
+      - name: 输出下载摘要
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << SUMMARYEOF
+          ## ✅ 文件下载完成
+
+          | 项目 | 值 |
+          |------|-----|
+          | 源 URL | \`${{ github.event.inputs.url }}\` |
+          | 文件名 | \`${{ steps.download.outputs.filename }}\` |
+          | 大小 | ${{ steps.download.outputs.size }} 字节 |
+
+          > 文件已上传到 artifact \`${{ steps.download.outputs.filename }}\`，可在本次运行页面下载。
+          SUMMARYEOF
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.download.outputs.filename }}
+          path: download/*
+
+  del:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 删除旧的流程记录
+      if: github.event.inputs.del == 'true'
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        retain_days: 0
+        keep_minimum_runs: 0
