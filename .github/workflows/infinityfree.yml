@@ -1,0 +1,33 @@
+name: infinityfree
+
+on:
+  schedule:
+    # 每天北京时间凌晨 3 点（UTC 19:00）执行
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+
+jobs:
+  visit:
+    name: chk wn.ifree.page
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.49.0-noble
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 安装 Playwright 依赖
+        run: npm install playwright@1.49.0 --no-save
+
+      - name: 无头浏览器访问 https://wn.ifree.page 并截图
+        run: node scripts/visit.mjs
+        env:
+          TARGET_URL: https://wn.ifree.page
+
+      - name: 上传截图到 Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: screenshot.png
+          retention-days: 7
